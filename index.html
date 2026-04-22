@@ -808,32 +808,43 @@ function fmtTime(ms) {
    EXCEL PARSING
 ══════════════════════════════════════════════ */
 function parseExcel(data) {
-  const wb = XLSX.read(data,{type:'array'});
+  // cellDates:false keeps everything as raw values so we control conversion
+  const wb = XLSX.read(data, {type:'array', cellDates:false, raw:false});
   const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+  // defval:'' ensures missing cells become empty string, not undefined
+  const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:'', raw:false});
+
+  // Safe cell → string: handles Date objects, numbers, nulls, etc.
+  function cellStr(val) {
+    if(val === null || val === undefined) return '';
+    if(val instanceof Date) {
+      // Format date back to a readable string (e.g. "2026-02-03")
+      return val.toISOString().slice(0,10);
+    }
+    return String(val).trim();
+  }
 
   const cards=[];
   // Auto-detect header row
-  const startRow = (rows[0] && String(rows[0][0]).trim().length<40
-    && /preg|quest|card|front|term/i.test(String(rows[0][0]))) ? 1 : 0;
+  const firstCell = cellStr(rows[0] && rows[0][0]);
+  const startRow = (firstCell.length < 40
+    && /preg|quest|card|front|term/i.test(firstCell)) ? 1 : 0;
 
   for(let i=startRow;i<rows.length;i++){
     const row=rows[i];
-    const q=String(row[0]||'').trim();
-    const a=String(row[1]||'').trim();
-    if(!q||!a) continue;
+    const q = cellStr(row[0]);
+    const a = cellStr(row[1]);
+    if(!q || !a) continue;
 
-    const extras=[
-      String(row[2]||'').trim(),
-      String(row[3]||'').trim(),
-      String(row[4]||'').trim(),
-    ].filter(o=>o!=='');
+    const extras = [row[2], row[3], row[4]]
+      .map(cellStr)
+      .filter(o => o !== '');
 
     cards.push({
       id:       hash(q+a),
       question: q,
       answer:   a,
-      type:     extras.length>=1 ? 'mcq' : 'simple',
+      type:     extras.length >= 1 ? 'mcq' : 'simple',
       extras:   extras,
     });
   }
