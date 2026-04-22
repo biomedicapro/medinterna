@@ -115,6 +115,20 @@ input,select,textarea{font-family:var(--font-sans)}
   letter-spacing:.04em;margin-top:5px;position:relative;
 }
 
+/* Auto-load status */
+.auto-status{
+  font-size:11px;padding:7px 12px;margin-bottom:14px;
+  border:1px solid var(--line);background:var(--bg2);
+  display:flex;align-items:center;gap:8px;
+  display:none;
+}
+.auto-status.show{display:flex}
+.auto-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;animation:blink 1s ease-in-out infinite}
+.auto-dot.ok{background:var(--easy);animation:none}
+.auto-dot.err{background:var(--hard);animation:none}
+.auto-dot.loading{background:var(--med)}
+@keyframes blink{0%,100%{opacity:.3}50%{opacity:1}}
+
 /* Stats grid */
 .stats-grid{
   display:grid;grid-template-columns:repeat(4,1fr);
@@ -350,7 +364,7 @@ input,select,textarea{font-family:var(--font-sans)}
 .lbl-med{color:var(--med)}
 .lbl-hard{color:var(--hard)}
 
-/* Swipe indicators (left edge) */
+/* Swipe indicators */
 .swipe-dots{
   position:absolute;right:12px;top:50%;transform:translateY(-50%);
   display:flex;flex-direction:column;gap:5px;opacity:0;
@@ -500,10 +514,16 @@ input,select,textarea{font-family:var(--font-sans)}
   </div>
   <div class="home-body">
 
-    <!-- Import -->
+    <!-- Auto-load status -->
+    <div class="auto-status" id="auto-status">
+      <div class="auto-dot loading" id="auto-dot"></div>
+      <span id="auto-msg">Cargando flashcards.xlsx…</span>
+    </div>
+
+    <!-- Import manual (fallback) -->
     <div class="drop-zone" id="drop-zone">
       <div class="dz-icon">📂</div>
-      <div class="dz-title">Cargar <code>flashcards.xlsx</code></div>
+      <div class="dz-title" id="dz-title">Cargar <code>flashcards.xlsx</code></div>
       <div class="dz-sub">Clic para seleccionar · o arrastra aquí el archivo</div>
       <div class="dz-file" id="dz-file"></div>
     </div>
@@ -715,15 +735,15 @@ input,select,textarea{font-family:var(--font-sans)}
    STATE
 ══════════════════════════════════════════════ */
 const S = {
-  cards:      [],      // All parsed cards
-  progress:   {},      // {cardId: 'new'|'easy'|'medium'|'hard'}
-  deck:       null,    // Active deck type
-  deckCards:  [],      // Cards in current session (with shuffled options)
-  idx:        0,       // Current card index
-  revealed:   false,   // Simple card: answer visible?
-  mcqDone:    false,   // MCQ: answered?
-  activeSlot: 0,       // Which slot is visible (0 or 1)
-  animating:  false,   // Transition in progress
+  cards:      [],
+  progress:   {},
+  deck:       null,
+  deckCards:  [],
+  idx:        0,
+  revealed:   false,
+  mcqDone:    false,
+  activeSlot: 0,
+  animating:  false,
   stats:      {easy:0,medium:0,hard:0},
   theme:      'light',
   fileName:   '',
@@ -832,13 +852,76 @@ function prepCard(card) {
 }
 
 /* ══════════════════════════════════════════════
+   PROCESS LOADED CARDS (shared by auto + manual)
+══════════════════════════════════════════════ */
+function applyCards(cards, fileName) {
+  if(!cards.length) return false;
+
+  // Preserve progress for matching card IDs
+  const newProg = {};
+  cards.forEach(c => { newProg[c.id] = S.progress[c.id] || 'new'; });
+
+  S.cards    = cards;
+  S.progress = newProg;
+  S.fileName = fileName;
+  persist();
+  updateHome();
+  return true;
+}
+
+/* ══════════════════════════════════════════════
+   AUTO-LOAD flashcards.xlsx via fetch
+   Works when the HTML is served over HTTP/HTTPS.
+   Falls back gracefully if the file isn't found.
+══════════════════════════════════════════════ */
+async function autoLoadExcel() {
+  const statusEl  = $id('auto-status');
+  const dotEl     = $id('auto-dot');
+  const msgEl     = $id('auto-msg');
+  const dzTitle   = $id('dz-title');
+
+  // Only attempt when served over HTTP (not file://)
+  if(location.protocol === 'file:') {
+    // Can't fetch local files — hide status, show normal drop zone
+    statusEl.classList.remove('show');
+    return;
+  }
+
+  statusEl.classList.add('show');
+  dotEl.className = 'auto-dot loading';
+  msgEl.textContent = 'Buscando flashcards.xlsx…';
+
+  try {
+    const res = await fetch('flashcards.xlsx', { cache: 'no-cache' });
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const buf   = await res.arrayBuffer();
+    const cards = parseExcel(new Uint8Array(buf));
+
+    if(!cards.length) throw new Error('Sin tarjetas válidas');
+
+    applyCards(cards, 'flashcards.xlsx');
+
+    dotEl.className  = 'auto-dot ok';
+    msgEl.textContent = `✓ flashcards.xlsx cargado — ${cards.length} tarjeta${cards.length!==1?'s':''}`;
+    if(dzTitle) dzTitle.textContent = 'Archivo cargado — clic para cambiar';
+
+  } catch(err) {
+    dotEl.className  = 'auto-dot err';
+    msgEl.textContent = 'flashcards.xlsx no encontrado — usa el área de abajo para cargarlo manualmente';
+    // Keep drop zone visible so user can load manually
+  }
+}
+
+/* ══════════════════════════════════════════════
    HOME / STATS
 ══════════════════════════════════════════════ */
 function getCounts() {
   const c={new:0,easy:0,medium:0,hard:0};
   S.cards.forEach(card=>{
     const d=S.progress[card.id]||'new';
-    c[d]++;
+    if(c[d]!==undefined) c[d]++;
+    else c['new']++;           // safety: unknown states treated as new
   });
   return c;
 }
@@ -876,20 +959,29 @@ function updateHome() {
   txt('cnt-hard', c.hard);
   txt('cnt-all',  total);
 
-  const hasCards=total>0;
-  [['dk-new','new'],['dk-easy','easy'],['dk-med','medium'],['dk-hard','hard'],['dk-all','all']]
-    .forEach(([id,deck])=>{
-      const btn=$id(id);
-      if(!btn) return;
-      let count=deck==='all'?total:(c[deck]||0);
-      btn.disabled=!hasCards||count===0;
-    });
+  // ── FIX: correct button disable logic ──
+  // A button should be enabled if hasCards AND that specific deck has cards.
+  // For 'new', 'easy', 'medium', 'hard': check count > 0.
+  // For 'all': check total > 0.
+  const hasCards = total > 0;
+
+  const deckMap = [
+    ['dk-new',  c.new],
+    ['dk-easy', c.easy],
+    ['dk-med',  c.medium],
+    ['dk-hard', c.hard],
+    ['dk-all',  total],
+  ];
+
+  deckMap.forEach(([id, count]) => {
+    const btn = $id(id);
+    if(!btn) return;
+    btn.disabled = !hasCards || count === 0;
+  });
 
   if(S.fileName) {
     const dzf=$id('dz-file');
     if(dzf) dzf.innerHTML=`<span class="dz-badge">📄 ${esc(S.fileName)} · ${total} tarjetas</span>`;
-    const dzt=document.querySelector('.dz-title');
-    if(dzt) dzt.textContent='Archivo cargado — clic para cambiar';
   }
 }
 
@@ -911,25 +1003,26 @@ function goHome() {
    START DECK
 ══════════════════════════════════════════════ */
 function startDeck(type) {
-  if(!S.cards.length) return;
+  if(!S.cards.length) { toast('Carga un archivo primero'); return; }
+
   const c=getCounts();
   let filtered;
   if(type==='all'){
-    filtered=S.cards;
+    filtered = [...S.cards];
   } else {
-    filtered=S.cards.filter(card=>(S.progress[card.id]||'new')===type);
+    filtered = S.cards.filter(card=>(S.progress[card.id]||'new')===type);
   }
-  if(!filtered.length) return;
+  if(!filtered.length) { toast('No hay tarjetas en este mazo'); return; }
 
-  S.deck=type;
-  S.deckCards=shuffle(filtered).map(prepCard);
-  S.idx=0;
-  S.stats={easy:0,medium:0,hard:0};
-  S.sessionStart=Date.now();
-  S.revealed=false;
-  S.mcqDone=false;
-  S.activeSlot=0;
-  S.animating=false;
+  S.deck       = type;
+  S.deckCards  = shuffle(filtered).map(prepCard);
+  S.idx        = 0;
+  S.stats      = {easy:0,medium:0,hard:0};
+  S.sessionStart = Date.now();
+  S.revealed   = false;
+  S.mcqDone    = false;
+  S.activeSlot = 0;
+  S.animating  = false;
 
   const deckNames={new:'Nuevas',easy:'Fácil',medium:'Medio',hard:'Difícil',all:'Todas'};
   txt('s-deck-lbl', deckNames[type]||type);
@@ -1041,7 +1134,6 @@ function handleMCQ(btn,correct,wrap,card,slotIdx) {
   if(S.animating||S.mcqDone) return;
   S.mcqDone=true;
 
-  // Disable all options
   const allBtns=wrap.querySelectorAll('.mcq-opt');
   allBtns.forEach(b=>{
     b.disabled=true;
@@ -1055,11 +1147,9 @@ function handleMCQ(btn,correct,wrap,card,slotIdx) {
   const note=$id('slot-'+slotIdx).querySelector('.mcq-note');
 
   if(correct) {
-    // Correct
     btn.classList.add('correct');
     if(note){ note.textContent='✓ Correcto'; note.style.color='var(--easy)'; note.classList.add('show'); }
   } else {
-    // Wrong
     btn.classList.add('wrong');
     if(note){ note.textContent='✗ Incorrecto — la correcta está marcada en verde'; note.style.color='var(--err)'; note.classList.add('show'); }
   }
@@ -1075,7 +1165,6 @@ function rate(level) {
   const card=S.deckCards[S.idx];
   if(!card) return;
 
-  // Require card to be interacted with
   if(card.type==='simple'&&!S.revealed){
     revealAnswer(S.activeSlot);
     return;
@@ -1108,11 +1197,9 @@ function navigate(dir) {
   const nxtSlotId=1-S.activeSlot;
   const nxtSlot=$id('slot-'+nxtSlotId);
 
-  // Render next card in background slot
   nxtSlot.style.cssText=`transform:translateY(${dir==='next'?'110%':'-110%'});pointer-events:none;transition:none`;
   renderSlot(nxtSlot, S.deckCards[newIdx], nxtSlotId);
 
-  // Double rAF for reliable CSS transition trigger
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
     const tr=`transform ${S.dur||360}ms cubic-bezier(.25,.1,.25,1)`;
     nxtSlot.style.cssText=`transition:${tr};transform:translateY(0);pointer-events:none`;
@@ -1166,7 +1253,6 @@ function endSession() {
   txt('sum-time', fmtTime(elapsed));
   txt('sum-sub',  `Estudiaste ${total} tarjeta${total!==1?'s':''} · ${S.stats.hard} para repasar`);
 
-  // Emblem based on performance
   const pct=total?Math.round(S.stats.easy/total*100):0;
   const emblem=$id('sum-emblem');
   if(emblem) emblem.textContent= pct>=80?'★': pct>=50?'✓':'↺';
@@ -1204,9 +1290,9 @@ function studyHard() {
     const dt=Date.now()-st;
     if(Math.abs(dy)<40||dt>700) return;
 
-    if(dy<0) { // Swipe up → next
+    if(dy<0) {
       handleNext();
-    } else {   // Swipe down → prev
+    } else {
       navigate('prev');
     }
   });
@@ -1231,7 +1317,6 @@ function handleNext() {
    KEYBOARD
 ══════════════════════════════════════════════ */
 document.addEventListener('keydown',e=>{
-  // Theme toggle works globally
   if(e.key.toLowerCase()==='d'&&!e.target.matches('input,textarea')){
     toggleTheme(); return;
   }
@@ -1259,7 +1344,7 @@ document.addEventListener('keydown',e=>{
 });
 
 /* ══════════════════════════════════════════════
-   FILE IMPORT
+   FILE IMPORT (manual fallback)
 ══════════════════════════════════════════════ */
 function loadFile(file) {
   if(!file) return;
@@ -1269,15 +1354,14 @@ function loadFile(file) {
     try {
       const cards=parseExcel(new Uint8Array(e.target.result));
       if(!cards.length){ toast('No se encontraron tarjetas válidas'); return; }
-
-      // Preserve progress for matching card IDs
-      const newProg={};
-      cards.forEach(c=>{ newProg[c.id]=S.progress[c.id]||'new'; });
-
-      S.cards=cards; S.progress=newProg; S.fileName=file.name;
-      persist();
-      updateHome();
+      applyCards(cards, file.name);
       toast(`${cards.length} tarjetas cargadas ✓`);
+
+      // Update auto-status to reflect manual load
+      const dotEl=$id('auto-dot'), msgEl=$id('auto-msg'), st=$id('auto-status');
+      if(dotEl) dotEl.className='auto-dot ok';
+      if(msgEl) msgEl.textContent=`✓ ${file.name} cargado — ${cards.length} tarjeta${cards.length!==1?'s':''}`;
+      if(st) st.classList.add('show');
     } catch(err) {
       toast('Error al leer el archivo');
       console.error(err);
@@ -1347,18 +1431,21 @@ function applyTheme() {
   document.documentElement.setAttribute('data-theme',S.theme);
   const btn=$id('btn-theme');
   if(btn) btn.textContent=S.theme==='light'?'🌙':'☀️';
-  btn.title=S.theme==='light'?'Cambiar a modo noche (D)':'Cambiar a modo día (D)';
+  if(btn) btn.title=S.theme==='light'?'Cambiar a modo noche (D)':'Cambiar a modo día (D)';
 }
 
 /* ══════════════════════════════════════════════
    INIT
 ══════════════════════════════════════════════ */
-function init() {
+async function init() {
   hydrate();
   applyTheme();
   updateHome();
 
-  // File input
+  // ── Try auto-loading flashcards.xlsx first ──
+  await autoLoadExcel();
+
+  // File input (manual fallback)
   const fi=$id('file-input');
   fi.addEventListener('change',e=>{ loadFile(e.target.files[0]); fi.value=''; });
 
@@ -1385,7 +1472,6 @@ function init() {
     ov.addEventListener('click',e=>{ if(e.target===ov) ov.classList.remove('open') });
   });
 
-  // Preload fonts
   document.fonts.ready.then(()=>{});
 }
 
