@@ -263,6 +263,7 @@ button { font-family:var(--sans); cursor:pointer; }
       <button class="ico" id="btn-theme" title="Tema (D)">🌙</button>
       <button class="ico" id="btn-stats" title="Estadísticas">◑</button>
       <button class="ico" id="btn-reset" title="Reiniciar">↺</button>
+      <button class="ico" id="btn-fullscreen" title="Pantalla completa (F)">⛶</button>
     </div>
   </div>
   <div class="home-body">
@@ -1038,7 +1039,13 @@ function applyTheme() {
   const b = $('btn-theme');
   if (b) { b.textContent = App.theme==='light' ? '🌙' : '☀️'; b.title = App.theme==='light' ? 'Modo oscuro (D)' : 'Modo claro (D)'; }
 }
-
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen();
+  } else {
+    document.exitFullscreen();
+  }
+}
 /* ─────────────────────────────────────────
    INIT
 ───────────────────────────────────────── */
@@ -1062,6 +1069,7 @@ async function init() {
   $('btn-theme').addEventListener('click', toggleTheme);
   $('btn-stats').addEventListener('click', showStats);
   $('btn-reset').addEventListener('click', () => {
+  $('btn-fullscreen').onclick = toggleFullscreen;
     if (!App.cards.length) { toast('No hay datos que reiniciar'); return; }
     $('modal-reset').classList.add('open');
   });
