@@ -1046,7 +1046,7 @@ function toggleFullscreen() {
     document.exitFullscreen();
   }
 }
-$('btn-fullscreen').onclick = toggleFullscreen;
+
 /* ─────────────────────────────────────────
    INIT
 ───────────────────────────────────────── */
@@ -1065,16 +1065,14 @@ async function init() {
   dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('over'); });
   dz.addEventListener('dragleave', () => dz.classList.remove('over'));
   dz.addEventListener('drop',      e => { e.preventDefault(); dz.classList.remove('over'); handleFile(e.dataTransfer.files[0]); });
-
   // Header buttons
   $('btn-theme').addEventListener('click', toggleTheme);
   $('btn-stats').addEventListener('click', showStats);
   $('btn-reset').addEventListener('click', () => {
-
     if (!App.cards.length) { toast('No hay datos que reiniciar'); return; }
     $('modal-reset').classList.add('open');
   });
-
+  $('btn-fullscreen').addEventListener('click', toggleFullscreen);
   // Close modals on backdrop click
   document.querySelectorAll('.overlay').forEach(ov => {
     ov.addEventListener('click', e => { if (e.target===ov) ov.classList.remove('open'); });
