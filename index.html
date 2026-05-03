@@ -1046,6 +1046,7 @@ function toggleFullscreen() {
     document.exitFullscreen();
   }
 }
+$('btn-fullscreen').onclick = toggleFullscreen;
 /* ─────────────────────────────────────────
    INIT
 ───────────────────────────────────────── */
@@ -1069,7 +1070,7 @@ async function init() {
   $('btn-theme').addEventListener('click', toggleTheme);
   $('btn-stats').addEventListener('click', showStats);
   $('btn-reset').addEventListener('click', () => {
-  $('btn-fullscreen').onclick = toggleFullscreen;
+
     if (!App.cards.length) { toast('No hay datos que reiniciar'); return; }
     $('modal-reset').classList.add('open');
   });
